@@ -2,6 +2,7 @@ package goresponse
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -42,6 +43,12 @@ func (ser *StandardErrorResponse) AddError(err error) *StandardErrorResponse {
 				"message": message,
 			})
 		}
+	} else if unmarshalErr, ok := err.(*json.UnmarshalTypeError); ok {
+		message := fmt.Sprintf("Unmarshal type error: expected %s but got %s", unmarshalErr.Type.String(), unmarshalErr.Value)
+		ser.Errors = append(ser.Errors, map[string]string{
+			"field":   unmarshalErr.Field,
+			"message": message,
+		})
 	} else if dbErr := checkDatabaseError(err); dbErr != "" {
 		ser.Errors = append(ser.Errors, map[string]string{
 			"field":   "-",
