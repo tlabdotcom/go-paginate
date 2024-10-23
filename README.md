@@ -1,17 +1,22 @@
 # Pkg for golang default response
 
+Maintainer: [jiharal](https://github.com/jiharal)
 
+![Go CI](https://github.com/tlabdotcom/goresponse/actions/workflows/go.yml/badge.svg)
+
+[![Go Report Card](https://goreportcard.com/badge/github.com/tlabdotcom/goresponse)](https://goreportcard.com/report/github.com/tlabdotcom/goresponse)
 
 ## Env for paginations
+
 ```shell
 MAX_LIMIT_PAGINATE=150
 ```
+
 by default is 100
-
-
 
 Example Usage:
 For Validation Error Response:
+
 ```go
 validationErr := validator.New().Struct(data)
 if validationErr != nil {
@@ -19,7 +24,9 @@ if validationErr != nil {
     response.AddError(validationErr).JSON(c)
 }
 ```
+
 For Database Error Response:
+
 ```go
 dbErr := db.QueryRowContext(ctx, query).Scan(&result)
 if dbErr != nil {
@@ -27,21 +34,24 @@ if dbErr != nil {
     response.AddError(dbErr).JSON(c)
 }
 ```
+
 For a Successful Response:
+
 ```go
 response := GenerateSingleDataResponse(data, "Data retrieved successfully", http.StatusOK)
 
 ```
+
 For a paginations
+
 ```go
 // Query the user data from the database or service
-	users, totalRecords, err := queryUsers(filter.Search, filter.Limit, *filter.Offset)
-	if err != nil {
-		response := NewStandardErrorResponse(http.StatusUnprocessableEntity)
-    response.AddError(validationErr).JSON(c)
-	}
-	// Generate a paginated response
-	paginatedResponse := GeneratePaginatedResponse(users, totalRecords, filter)
-
-	return c.JSON(http.StatusOK, paginatedResponse)
+users, totalRecords, err := queryUsers(filter.Search, filter.Limit, *filter.Offset)
+if err != nil {
+	response := NewStandardErrorResponse(http.StatusUnprocessableEntity)
+response.AddError(validationErr).JSON(c)
+}
+// Generate a paginated response
+paginatedResponse := GeneratePaginatedResponse(users, totalRecords, filter)
+return c.JSON(http.StatusOK, paginatedResponse)
 ```

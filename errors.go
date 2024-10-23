@@ -14,17 +14,56 @@ import (
 
 // StandardErrorResponse defines the structure of the error response
 type StandardErrorResponse struct {
-	Code    int                 `json:"code"`
-	Message string              `json:"message"`
-	Errors  []map[string]string `json:"errors"`
+	Code      int                 `json:"code"`
+	Message   string              `json:"message"`
+	Errors    []map[string]string `json:"errors"`
+	RequestID string              `json:"request_id,omitempty"`
 }
 
-// NewStandardErrorResponse creates a new instance of StandardErrorResponse with the provided status code
+// HTTPError represents custom error types
+type HTTPError struct {
+	Code     int
+	Message  string
+	Internal error
+}
+
+// Error implements the error interface
+func (e *HTTPError) Error() string {
+	return e.Message
+}
+
+// NewStandardErrorResponse creates a new instance of StandardErrorResponse
 func NewStandardErrorResponse(statusCode int) *StandardErrorResponse {
 	return &StandardErrorResponse{
 		Code:    statusCode,
-		Message: http.StatusText(statusCode),
+		Message: getDefaultMessageForStatus(statusCode),
 		Errors:  []map[string]string{},
+	}
+}
+
+// getDefaultMessageForStatus returns user-friendly messages for HTTP status codes
+func getDefaultMessageForStatus(code int) string {
+	switch code {
+	case http.StatusBadRequest:
+		return "We couldn't process your request due to invalid input"
+	case http.StatusUnauthorized:
+		return "Please authenticate to access this resource"
+	case http.StatusForbidden:
+		return "You don't have permission to access this resource"
+	case http.StatusNotFound:
+		return "The requested resource couldn't be found"
+	case http.StatusConflict:
+		return "This operation conflicts with an existing resource"
+	case http.StatusUnprocessableEntity:
+		return "The submitted data failed validation"
+	case http.StatusTooManyRequests:
+		return "You've exceeded the allowed number of requests. Please try again later"
+	case http.StatusInternalServerError:
+		return "An unexpected error occurred. Our team has been notified"
+	case http.StatusServiceUnavailable:
+		return "The service is temporarily unavailable. Please try again later"
+	default:
+		return http.StatusText(code)
 	}
 }
 
@@ -33,32 +72,33 @@ func (ser *StandardErrorResponse) ResetErrors() {
 	ser.Errors = []map[string]string{}
 }
 
-// AddError adds an error to the response, handles validation and database errors
+// AddError adds an error to the response with improved error handling
 func (ser *StandardErrorResponse) AddError(err error) *StandardErrorResponse {
-	if validationErrors, ok := err.(validator.ValidationErrors); ok {
-		for _, validationErr := range validationErrors {
-			message := getValidationErrorMessage(validationErr)
+	switch e := err.(type) {
+	case validator.ValidationErrors:
+		for _, validationErr := range e {
 			ser.Errors = append(ser.Errors, map[string]string{
-				"field":   validationErr.Field(),
-				"message": message,
+				"field":   toSnakeCase(validationErr.Field()),
+				"message": getValidationErrorMessage(validationErr),
 			})
 		}
-	} else if unmarshalErr, ok := err.(*json.UnmarshalTypeError); ok {
-		message := fmt.Sprintf("Unmarshal type error: expected %s but got %s", unmarshalErr.Type.String(), unmarshalErr.Value)
+	case *json.UnmarshalTypeError:
 		ser.Errors = append(ser.Errors, map[string]string{
-			"field":   unmarshalErr.Field,
-			"message": message,
+			"field":   toSnakeCase(e.Field),
+			"message": fmt.Sprintf("Invalid value for %s. Expected %s", e.Field, e.Type.String()),
 		})
-	} else if dbErr := checkDatabaseError(err); dbErr != "" {
-		ser.Errors = append(ser.Errors, map[string]string{
-			"field":   "-",
-			"message": dbErr,
-		})
-	} else {
-		ser.Errors = append(ser.Errors, map[string]string{
-			"field":   "-",
-			"message": err.Error(),
-		})
+	default:
+		if dbErr := getDatabaseErrorMessage(err); dbErr != "" {
+			ser.Errors = append(ser.Errors, map[string]string{
+				"field":   "database",
+				"message": dbErr,
+			})
+		} else {
+			ser.Errors = append(ser.Errors, map[string]string{
+				"field":   "general",
+				"message": err.Error(),
+			})
+		}
 	}
 	return ser
 }
@@ -72,75 +112,103 @@ func (ser *StandardErrorResponse) AddMessageError(field string, message string) 
 	return ser
 }
 
-// JSON sends the response as JSON with appropriate status code and message
+// JSON sends the response with request tracking and documentation
 func (ser *StandardErrorResponse) JSON(c echo.Context) error {
-	if ser.Code == 422 {
-		ser.Message = "Validation Failed"
-	} else {
-		ser.Message = http.StatusText(ser.Code)
+	// Add request tracking ID if available
+	if reqID := c.Request().Header.Get("X-Request-ID"); reqID != "" {
+		ser.RequestID = reqID
 	}
 	return c.JSON(ser.Code, ser)
 }
 
-// CustomErrorHandler is a custom error handler for handling errors globally
+// CustomErrorHandler handles errors globally with improved context
 func CustomErrorHandler(err error, c echo.Context) {
-	newErr := NewStandardErrorResponse(http.StatusInternalServerError)
-	newErr.ResetErrors()
+	var statusCode int
+	var message string
 
-	if httpErr, ok := err.(*echo.HTTPError); ok {
-		newErr.Code = httpErr.Code
-		if httpErr.Code == http.StatusUnauthorized {
-			newErr.AddMessageError("authorization", "Unauthorized access").JSON(c)
-		} else if httpErr.Code == http.StatusBadRequest {
-			newErr.AddMessageError("bad_request", httpErr.Message.(string)).JSON(c)
-		} else {
-			newErr.AddMessageError("internal", httpErr.Message.(string)).JSON(c)
-		}
-	} else {
-		newErr.AddMessageError("internal", err.Error()).JSON(c)
+	switch e := err.(type) {
+	case *echo.HTTPError:
+		statusCode = e.Code
+		message = fmt.Sprintf("%v", e.Message)
+	case *HTTPError:
+		statusCode = e.Code
+		message = e.Message
+	default:
+		statusCode = http.StatusInternalServerError
+		message = "An unexpected error occurred"
 	}
+
+	resp := NewStandardErrorResponse(statusCode)
+	resp.AddMessageError("error", message).JSON(c)
 }
 
-// getValidationErrorMessage returns a user-friendly message for a validation error
+// getValidationErrorMessage returns human-friendly validation error messages
 func getValidationErrorMessage(validationErr validator.FieldError) string {
+	fieldName := humanizeFieldName(validationErr.Field())
+
 	switch validationErr.Tag() {
 	case "required":
-		return fmt.Sprintf("%s is required", validationErr.Field())
+		return fmt.Sprintf("Please provide %s", fieldName)
 	case "email":
-		return fmt.Sprintf("%s must be a valid email address", validationErr.Field())
+		return fmt.Sprintf("Please enter a valid email address for %s", fieldName)
 	case "min":
-		return fmt.Sprintf("%s must be at least %s characters long", validationErr.Field(), validationErr.Param())
+		return fmt.Sprintf("%s must be at least %s characters", fieldName, validationErr.Param())
 	case "max":
-		return fmt.Sprintf("%s must be at most %s characters long", validationErr.Field(), validationErr.Param())
+		return fmt.Sprintf("%s cannot be longer than %s characters", fieldName, validationErr.Param())
 	case "gte":
-		return fmt.Sprintf("%s must be greater than or equal to %s", validationErr.Field(), validationErr.Param())
+		return fmt.Sprintf("%s must be %s or greater", fieldName, validationErr.Param())
 	case "lte":
-		return fmt.Sprintf("%s must be less than or equal to %s", validationErr.Field(), validationErr.Param())
+		return fmt.Sprintf("%s must be %s or less", fieldName, validationErr.Param())
+	case "url":
+		return fmt.Sprintf("Please enter a valid URL for %s", fieldName)
+	case "datetime":
+		return fmt.Sprintf("Please enter a valid date and time for %s", fieldName)
 	default:
-		return fmt.Sprintf("%s is not valid", validationErr.Field())
+		return fmt.Sprintf("%s has an invalid value", fieldName)
 	}
 }
 
-// checkDatabaseError returns a user-friendly message for database errors
-func checkDatabaseError(err error) string {
+// getDatabaseErrorMessage returns user-friendly database error messages
+func getDatabaseErrorMessage(err error) string {
 	if errors.Is(err, sql.ErrNoRows) {
-		return "No matching record found"
+		return "We couldn't find what you're looking for"
 	}
 	if errors.Is(err, sql.ErrConnDone) {
-		return "Database connection was closed"
+		return "We're having trouble connecting to our database. Please try again"
 	}
+
 	errMsg := err.Error()
-	if strings.Contains(errMsg, "unique constraint") {
-		return "A record with the same value already exists"
+	switch {
+	case strings.Contains(errMsg, "unique constraint"):
+		return "This information already exists in our system"
+	case strings.Contains(errMsg, "foreign key constraint"):
+		return "This operation references invalid or non-existent data"
+	case strings.Contains(errMsg, "not-null constraint"):
+		return "Required information is missing"
+	case strings.Contains(errMsg, "invalid input syntax"):
+		return "The provided data format is invalid"
+	default:
+		return ""
 	}
-	if strings.Contains(errMsg, "foreign key constraint") {
-		return "A foreign key constraint violation"
+}
+
+// humanizeFieldName converts camelCase field names to human-readable format
+func humanizeFieldName(field string) string {
+	words := strings.Split(toSnakeCase(field), "_")
+	for i, word := range words {
+		words[i] = strings.ToLower(word)
 	}
-	if strings.Contains(errMsg, "not-null constraint") {
-		return "A required field is missing"
+	return strings.Join(words, " ")
+}
+
+// toSnakeCase converts camelCase to snake_case
+func toSnakeCase(str string) string {
+	var result strings.Builder
+	for i, r := range str {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			result.WriteRune('_')
+		}
+		result.WriteRune(r)
 	}
-	if strings.Contains(errMsg, "invalid input syntax for") {
-		return "Invalid input syntax"
-	}
-	return ""
+	return strings.ToLower(result.String())
 }
