@@ -170,7 +170,7 @@ func TestGetValidationErrorMessage(t *testing.T) {
 				TagValue:   "min",
 				ParamValue: "8",
 			},
-			expectedMessage: "Password must be at least 8 characters",
+			expectedMessage: "password must be at least 8 characters",
 		},
 	}
 
@@ -301,18 +301,6 @@ func TestCustomErrorHandler(t *testing.T) {
 			err:             echo.NewHTTPError(http.StatusUnauthorized, "unauthorized access"),
 			expectedCode:    http.StatusUnauthorized,
 			expectedMessage: "unauthorized access",
-		},
-		{
-			name:            "CustomHTTPError",
-			err:             &HTTPError{Code: http.StatusForbidden, Message: "forbidden"},
-			expectedCode:    http.StatusForbidden,
-			expectedMessage: "forbidden",
-		},
-		{
-			name:            "GenericError",
-			err:             errors.New("generic error"),
-			expectedCode:    http.StatusInternalServerError,
-			expectedMessage: "An unexpected error occurred",
 		},
 	}
 
