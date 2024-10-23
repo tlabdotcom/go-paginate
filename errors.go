@@ -139,7 +139,17 @@ func CustomErrorHandler(err error, c echo.Context) {
 	}
 
 	resp := NewStandardErrorResponse(statusCode)
-	resp.AddMessageError("error", message).JSON(c)
+	errResp := resp.AddMessageError("error", message).JSON(c)
+
+	if errResp != nil {
+		// Log the error and handle it
+		c.Logger().Errorf("Failed to send JSON response: %v", errResp)
+
+		// Check and handle the error from c.JSON
+		if jsonErr := c.JSON(http.StatusInternalServerError, map[string]string{"field": "internal", "message": "Failed to send error response"}); jsonErr != nil {
+			c.Logger().Errorf("Failed to send fallback JSON response: %v", jsonErr)
+		}
+	}
 }
 
 // getValidationErrorMessage returns human-friendly validation error messages
