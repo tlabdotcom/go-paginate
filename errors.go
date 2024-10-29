@@ -88,16 +88,21 @@ func (ser *StandardErrorResponse) AddError(err error) *StandardErrorResponse {
 			"message": fmt.Sprintf("Invalid value for %s. Expected %s", e.Field, e.Type.String()),
 		})
 	default:
-		if dbErr := getDatabaseErrorMessage(err); dbErr != "" {
+		// Check if the error is a database error
+		if isDatabaseError(err) {
+			statusCode, dbMessage := getDatabaseErrorResponse(err)
+			ser.Code = statusCode
 			ser.Errors = append(ser.Errors, map[string]string{
 				"field":   "database",
-				"message": dbErr,
+				"message": dbMessage,
 			})
 		} else {
+			// General error handling
 			ser.Errors = append(ser.Errors, map[string]string{
 				"field":   "general",
 				"message": err.Error(),
 			})
+			ser.Code = http.StatusInternalServerError
 		}
 	}
 	return ser
@@ -178,28 +183,44 @@ func getValidationErrorMessage(validationErr validator.FieldError) string {
 	}
 }
 
-// getDatabaseErrorMessage returns user-friendly database error messages
-func getDatabaseErrorMessage(err error) string {
-	if errors.Is(err, sql.ErrNoRows) {
-		return "We couldn't find what you're looking for"
-	}
-	if errors.Is(err, sql.ErrConnDone) {
-		return "We're having trouble connecting to our database. Please try again"
-	}
+// isDatabaseError checks if the error is likely to originate from a database.
+func isDatabaseError(err error) bool {
+	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, sql.ErrConnDone) ||
+		strings.Contains(err.Error(), "constraint") || strings.Contains(err.Error(), "syntax")
+}
 
-	errMsg := err.Error()
-	switch {
-	case strings.Contains(errMsg, "unique constraint"):
-		return "This information already exists in our system"
-	case strings.Contains(errMsg, "foreign key constraint"):
-		return "This operation references invalid or non-existent data"
-	case strings.Contains(errMsg, "not-null constraint"):
-		return "Required information is missing"
-	case strings.Contains(errMsg, "invalid input syntax"):
-		return "The provided data format is invalid"
-	default:
-		return ""
+// getDatabaseErrorResponse maps database-related errors to appropriate HTTP status codes and messages.
+func getDatabaseErrorResponse(err error) (int, string) {
+	var statusCode int
+	var message string
+
+	if errors.Is(err, sql.ErrNoRows) {
+		statusCode = http.StatusNotFound
+		message = "We couldn't find what you're looking for"
+	} else if errors.Is(err, sql.ErrConnDone) {
+		statusCode = http.StatusInternalServerError
+		message = "We're having trouble connecting to our database. Please try again"
+	} else {
+		errMsg := err.Error()
+		switch {
+		case strings.Contains(errMsg, "unique constraint"):
+			statusCode = http.StatusConflict
+			message = "This information already exists in our system"
+		case strings.Contains(errMsg, "foreign key constraint"):
+			statusCode = http.StatusBadRequest
+			message = "This operation references invalid or non-existent data"
+		case strings.Contains(errMsg, "not-null constraint"):
+			statusCode = http.StatusBadRequest
+			message = "Required information is missing"
+		case strings.Contains(errMsg, "invalid input syntax"):
+			statusCode = http.StatusBadRequest
+			message = "The provided data format is invalid"
+		default:
+			statusCode = http.StatusInternalServerError
+			message = "An unexpected database error occurred"
+		}
 	}
+	return statusCode, message
 }
 
 // humanizeFieldName converts camelCase field names to human-readable format

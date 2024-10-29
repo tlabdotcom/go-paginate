@@ -183,38 +183,48 @@ func TestGetValidationErrorMessage(t *testing.T) {
 }
 
 // TestGetDatabaseErrorMessage tests database error message generation
-func TestGetDatabaseErrorMessage(t *testing.T) {
+func TestGetDatabaseErrorResponse(t *testing.T) {
 	tests := []struct {
 		name            string
 		err             error
 		expectedMessage string
+		code            int
 	}{
 		{
 			name:            "NoRows",
 			err:             sql.ErrNoRows,
 			expectedMessage: "We couldn't find what you're looking for",
+			code:            http.StatusNotFound,
 		},
 		{
 			name:            "ConnectionClosed",
 			err:             sql.ErrConnDone,
 			expectedMessage: "We're having trouble connecting to our database. Please try again",
+			code:            http.StatusInternalServerError,
 		},
 		{
 			name:            "UniqueConstraint",
 			err:             errors.New("unique constraint violation"),
 			expectedMessage: "This information already exists in our system",
+			code:            http.StatusConflict,
 		},
 		{
 			name:            "UnknownError",
 			err:             errors.New("unknown error"),
-			expectedMessage: "",
+			expectedMessage: "An unexpected database error occurred",
+			code:            http.StatusInternalServerError,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			message := getDatabaseErrorMessage(tt.err)
-			assert.Equal(t, tt.expectedMessage, message)
+			code, msg := getDatabaseErrorResponse(tt.err)
+
+			// Check that the status code matches the expected code
+			assert.Equal(t, tt.code, code)
+			// If no errors returned, ensure expectedMessage is empty
+			assert.Equal(t, tt.expectedMessage, msg)
+
 		})
 	}
 }
