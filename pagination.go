@@ -14,12 +14,17 @@ import (
 
 type (
 	FilterOptions struct {
-		Page   int    `param:"page" query:"page" form:"page" json:"page,omitempty" xml:"page,omitempty"`
-		Limit  int    `param:"limit" query:"limit" form:"limit" json:"limit,omitempty" xml:"limit,omitempty"`
-		Offset *int   `param:"offset" query:"offset" form:"offset" json:"offset,omitempty" xml:"offset,omitempty"`
-		Search string `param:"q" query:"q" form:"q" json:"q,omitempty" xml:"q,omitempty"`
-		Dir    string `param:"sort" query:"sort" form:"sort" json:"sort,omitempty" xml:"sort,omitempty"`
-		SortBy string `param:"sort_by" query:"sort_by" form:"sort_by" json:"sort_by,omitempty" xml:"sort_by,omitempty"`
+		Page       int      `param:"page" query:"page" form:"page" json:"page,omitempty" xml:"page,omitempty"`
+		Limit      int      `param:"limit" query:"limit" form:"limit" json:"limit,omitempty" xml:"limit,omitempty"`
+		Offset     *int     `param:"offset" query:"offset" form:"offset" json:"offset,omitempty" xml:"offset,omitempty"`
+		Search     string   `param:"q" query:"q" form:"q" json:"q,omitempty" xml:"q,omitempty"`
+		Dir        string   `param:"sort" query:"sort" form:"sort" json:"sort,omitempty" xml:"sort,omitempty"`
+		SortBy     string   `param:"sort_by" query:"sort_by" form:"sort_by" json:"sort_by,omitempty" xml:"sort_by,omitempty"`
+		StartDate  string   `param:"start_date" query:"start_date" form:"start_date" json:"start_date,omitempty" xml:"start_date,omitempty"`
+		EndDate    string   `param:"end_date" query:"end_date" form:"end_date" json:"end_date,omitempty" xml:"end_date,omitempty"`
+		Type       string   `param:"type" query:"type" form:"type" json:"type,omitempty" xml:"type,omitempty"`
+		Status     string   `param:"status" query:"status" form:"status" json:"status,omitempty" xml:"status,omitempty"`
+		Categories []string `param:"categories" query:"categories" form:"categories" json:"categories,omitempty" xml:"categories,omitempty"`
 	}
 	PaginatedResponse struct {
 		TotalData   int            `json:"total_data,omitempty"`
@@ -39,29 +44,36 @@ func (filter FilterOptions) GenerateCacheKey(redisKeyPrefix string) string {
 		field := v.Type().Field(i).Tag.Get("query")
 		fieldValue := v.Field(i)
 
-		// Skip if no field name (empty tag)
 		if field == "" {
 			continue
 		}
 
-		// Handle based on the field type
 		switch fieldValue.Kind() {
-		case reflect.Ptr: // Handle pointer fields like *int
+		case reflect.Ptr:
 			if !fieldValue.IsNil() {
 				value := fmt.Sprintf("%v", fieldValue.Elem().Interface())
 				if value != "" {
 					sortedFields = append(sortedFields, fmt.Sprintf("%s:%s", field, value))
 				}
 			}
-		case reflect.String: // Handle string fields
+		case reflect.String:
 			value := fieldValue.String()
 			if value != "" {
 				sortedFields = append(sortedFields, fmt.Sprintf("%s:%s", field, value))
 			}
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64: // Handle integer fields
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 			value := fmt.Sprintf("%d", fieldValue.Int())
-			if value != "0" { // Skip zero values for integers
+			if value != "0" {
 				sortedFields = append(sortedFields, fmt.Sprintf("%s:%s", field, value))
+			}
+		case reflect.Slice:
+			if !fieldValue.IsNil() && fieldValue.Len() > 0 {
+				values := make([]string, fieldValue.Len())
+				for i := 0; i < fieldValue.Len(); i++ {
+					values[i] = fmt.Sprintf("%v", fieldValue.Index(i).Interface())
+				}
+				sort.Strings(values)
+				sortedFields = append(sortedFields, fmt.Sprintf("%s:%s", field, strings.Join(values, ",")))
 			}
 		}
 	}
@@ -117,12 +129,29 @@ func (filter *FilterOptions) Validate() *FilterOptions {
 		offset := (filter.Page - 1) * filter.Limit
 		filter.Offset = &offset
 	}
+	// Clean up Type and Status
+	filter.Type = strings.TrimSpace(filter.Type)
+	filter.Status = strings.TrimSpace(filter.Status)
+
+	// Clean up Dates
+	filter.StartDate = strings.TrimSpace(filter.StartDate)
+	filter.EndDate = strings.TrimSpace(filter.EndDate)
+
+	// Clean up Categories
+	if len(filter.Categories) > 0 {
+		cleanCategories := make([]string, 0)
+		for _, category := range filter.Categories {
+			if trimmed := strings.TrimSpace(category); trimmed != "" {
+				cleanCategories = append(cleanCategories, trimmed)
+			}
+		}
+		filter.Categories = cleanCategories
+	}
 
 	return filter
 }
 
 func GeneratePaginatedResponse(data interface{}, totalData int, filter *FilterOptions) *PaginatedResponse {
-	// Calculate total pages, rounding up
 	totalPage := int(math.Ceil(float64(totalData) / float64(filter.Limit)))
 
 	return &PaginatedResponse{
