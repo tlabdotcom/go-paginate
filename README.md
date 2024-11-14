@@ -55,3 +55,25 @@ response.AddError(validationErr).JSON(c)
 paginatedResponse := GeneratePaginatedResponse(users, totalRecords, filter)
 return c.JSON(http.StatusOK, paginatedResponse)
 ```
+
+## notes
+
+before push please check your code using
+
+gocyclo
+
+```shell
+gocyclo -over 10 .
+```
+
+golangci-lint
+
+```shell
+golangci-lint run
+```
+
+go test
+
+```shell
+go test ./... -coverprofile=coverage.out
+```

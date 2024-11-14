@@ -36,51 +36,68 @@ type (
 	}
 )
 
+// handleFieldValue processes a single field value and returns its string representation
+func handleFieldValue(fieldValue reflect.Value) (string, bool) {
+	if fieldValue.Kind() == reflect.Ptr && fieldValue.IsNil() {
+		return "", false
+	}
+
+	switch fieldValue.Kind() {
+	case reflect.Ptr:
+		value := fmt.Sprintf("%v", fieldValue.Elem().Interface())
+		return value, value != ""
+
+	case reflect.String:
+		value := fieldValue.String()
+		return value, value != ""
+
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		value := fmt.Sprintf("%d", fieldValue.Int())
+		return value, value != "0"
+
+	case reflect.Slice:
+		if fieldValue.IsNil() || fieldValue.Len() == 0 {
+			return "", false
+		}
+		values := make([]string, fieldValue.Len())
+		for i := 0; i < fieldValue.Len(); i++ {
+			values[i] = fmt.Sprintf("%v", fieldValue.Index(i).Interface())
+		}
+		sort.Strings(values)
+		return strings.Join(values, ","), true
+	}
+
+	return "", false
+}
+
+// formatCacheKeyField formats a field name and value into a cache key segment
+func formatCacheKeyField(fieldName, fieldValue string) string {
+	return fmt.Sprintf("%s:%s", fieldName, fieldValue)
+}
+
+// GenerateCacheKey generates a unique cache key based on filter values
 func (filter FilterOptions) GenerateCacheKey(redisKeyPrefix string) string {
 	sortedFields := make([]string, 0)
 	v := reflect.ValueOf(filter)
+	t := v.Type()
 
 	for i := 0; i < v.NumField(); i++ {
-		field := v.Type().Field(i).Tag.Get("query")
-		fieldValue := v.Field(i)
-
+		field := t.Field(i).Tag.Get("query")
 		if field == "" {
 			continue
 		}
 
-		switch fieldValue.Kind() {
-		case reflect.Ptr:
-			if !fieldValue.IsNil() {
-				value := fmt.Sprintf("%v", fieldValue.Elem().Interface())
-				if value != "" {
-					sortedFields = append(sortedFields, fmt.Sprintf("%s:%s", field, value))
-				}
-			}
-		case reflect.String:
-			value := fieldValue.String()
-			if value != "" {
-				sortedFields = append(sortedFields, fmt.Sprintf("%s:%s", field, value))
-			}
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			value := fmt.Sprintf("%d", fieldValue.Int())
-			if value != "0" {
-				sortedFields = append(sortedFields, fmt.Sprintf("%s:%s", field, value))
-			}
-		case reflect.Slice:
-			if !fieldValue.IsNil() && fieldValue.Len() > 0 {
-				values := make([]string, fieldValue.Len())
-				for i := 0; i < fieldValue.Len(); i++ {
-					values[i] = fmt.Sprintf("%v", fieldValue.Index(i).Interface())
-				}
-				sort.Strings(values)
-				sortedFields = append(sortedFields, fmt.Sprintf("%s:%s", field, strings.Join(values, ",")))
-			}
+		fieldValue := v.Field(i)
+		value, hasValue := handleFieldValue(fieldValue)
+		if hasValue {
+			sortedFields = append(sortedFields, formatCacheKeyField(field, value))
 		}
 	}
 
 	sort.Strings(sortedFields)
 	concatenated := strings.Join(sortedFields, ":")
 	hashValue := goencryption.Sha256Hash([]byte(concatenated))
+
 	return redisKeyPrefix + "list:" + hashValue
 }
 
